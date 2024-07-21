@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,10 +19,14 @@ var (
 	outputLocation  string
 	version         = "1.0.1"
 	author          = "https://github.com/easttexaselectronics"
-	repository      = "https://github.com/easttexaselectronics/file-tree-generator"
+	repository      = "https://github.com/EastTexasElectronics/File-Tree-Generator-Multiverse/tree/main/Go"
 	donation        = "https://www.buymeacoffee.com/rmhavelaar"
 	outputFile      *os.File
 )
+
+func init() {
+	log.SetFlags(0)
+}
 
 func showUsage() {
 	fmt.Println(`Usage: ftg [-e pattern1,pattern2,...] [-o output_location] [-i] [-c] [-h] [-v]
@@ -42,8 +47,7 @@ func showVersion() {
 }
 
 func errorExit(message string) {
-	fmt.Fprintf(os.Stderr, "Error: %s\n", message)
-	os.Exit(1)
+	log.Fatalf("Error: %s\n", message)
 }
 
 func shouldExclude(name string) bool {
@@ -51,11 +55,7 @@ func shouldExclude(name string) bool {
 }
 
 func getEntries(path string) ([]fs.DirEntry, error) {
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get entries for directory %s: %w", path, err)
-	}
-	return entries, nil
+	return os.ReadDir(path)
 }
 
 func printEntry(writer io.Writer, name, entryType, indent string, isLast bool) {
@@ -89,9 +89,9 @@ func processEntry(writer io.Writer, entry fs.DirEntry, path, indent string, isLa
 
 func getEntryType(entry fs.DirEntry) string {
 	if entry.IsDir() {
-		return "Directory"
+		return "D"
 	}
-	return "File"
+	return "F"
 }
 
 func updateIndent(indent string, isLast bool) string {
@@ -104,7 +104,7 @@ func updateIndent(indent string, isLast bool) string {
 func generateTree(writer io.Writer, path, indent string) {
 	entries, err := getEntries(path)
 	if err != nil {
-		errorExit(fmt.Sprintf("Failed to read directory %s", path))
+		errorExit(fmt.Sprintf("Failed to read directory %s: %v", path, err))
 	}
 
 	for i, entry := range entries {
@@ -226,21 +226,17 @@ func main() {
 
 	flag.Parse()
 
-	if help {
+	switch {
+	case help:
 		showUsage()
-	}
-
-	if versionFlag {
+	case versionFlag:
 		showVersion()
-	}
-
-	if clear {
+	case clear:
 		excludePatterns = map[string]bool{}
 	}
 
 	if exclude != "" {
-		patterns := strings.Split(exclude, ",")
-		for _, pattern := range patterns {
+		for _, pattern := range strings.Split(exclude, ",") {
 			excludePatterns[pattern] = true
 		}
 	}
