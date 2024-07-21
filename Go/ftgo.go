@@ -1,7 +1,3 @@
-// This is a Go implementation of the File Tree Generator tool.
-// This is not been thoroughly tested, and may contain bugs.
-// Please use the Zsh version for a more reliable and complete implementation.
-
 package main
 
 import (
@@ -22,6 +18,8 @@ var (
 	outputLocation  string
 	version         = "1.0.0"
 	author          = "https://github.com/easttexaselectronics"
+	repository      = "https://github.com/easttexaselectronics/file-tree-generator"
+	donation        = "https://www.buymeacoffee.com/rmhavelaar"
 	outputFile      *os.File
 )
 
