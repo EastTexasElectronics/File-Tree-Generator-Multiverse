@@ -16,7 +16,7 @@ import (
 var (
 	excludePatterns = map[string]bool{}
 	outputLocation  string
-	version         = "1.0.0"
+	version         = "1.0.1"
 	author          = "https://github.com/easttexaselectronics"
 	repository      = "https://github.com/easttexaselectronics/file-tree-generator"
 	donation        = "https://www.buymeacoffee.com/rmhavelaar"
@@ -36,7 +36,8 @@ Options:
 }
 
 func showVersion() {
-	fmt.Printf("File Tree Generator version: %s\nLeave us a star at %s\nBuy me a coffee: https://www.buymeacoffee.com/rmhavelaar\n", version, author)
+	fmt.Printf("File Tree Generator version: %s\nLeave us a star at %s\n", version, repository)
+	fmt.Printf("Buy me a coffee: %s\n", donation)
 	os.Exit(0)
 }
 
@@ -58,41 +59,46 @@ func getEntries(path string) ([]fs.DirEntry, error) {
 }
 
 func printEntry(writer io.Writer, name, entryType, indent string, isLast bool) {
-	var connector string
-	if isLast {
-		connector = "└──"
-	} else {
-		connector = "├──"
-	}
+	connector := getConnector(isLast)
 	fmt.Fprintf(writer, "%s%s [%s] %s\n", indent, connector, entryType, name)
+}
+
+func getConnector(isLast bool) string {
+	if isLast {
+		return "└──"
+	}
+	return "├──"
 }
 
 func processEntry(writer io.Writer, entry fs.DirEntry, path, indent string, isLast bool) {
 	name := entry.Name()
 	fullPath := filepath.Join(path, name)
-	var entryType string
+	entryType := getEntryType(entry)
 
 	if shouldExclude(name) {
 		return
 	}
 
-	if entry.IsDir() {
-		entryType = "Directory"
-	} else {
-		entryType = "File"
-	}
-
 	printEntry(writer, name, entryType, indent, isLast)
 
 	if entryType == "Directory" {
-		newIndent := indent
-		if isLast {
-			newIndent += "    "
-		} else {
-			newIndent += "│   "
-		}
+		newIndent := updateIndent(indent, isLast)
 		generateTree(writer, fullPath, newIndent)
 	}
+}
+
+func getEntryType(entry fs.DirEntry) string {
+	if entry.IsDir() {
+		return "Directory"
+	}
+	return "File"
+}
+
+func updateIndent(indent string, isLast bool) string {
+	if isLast {
+		return indent + "    "
+	}
+	return indent + "│   "
 }
 
 func generateTree(writer io.Writer, path, indent string) {
@@ -101,10 +107,8 @@ func generateTree(writer io.Writer, path, indent string) {
 		errorExit(fmt.Sprintf("Failed to read directory %s", path))
 	}
 
-	count := len(entries)
-
 	for i, entry := range entries {
-		isLast := i == count-1
+		isLast := i == len(entries)-1
 		processEntry(writer, entry, path, indent, isLast)
 	}
 }
@@ -112,20 +116,8 @@ func generateTree(writer io.Writer, path, indent string) {
 func interactiveMode() {
 	reader := bufio.NewReader(os.Stdin)
 	for {
-		// List all entries with IDs
-		fmt.Println("List of files and directories in the current directory:")
-		entries, err := getEntries(".")
-		if err != nil {
-			errorExit("Failed to read current directory")
-		}
+		listEntries()
 
-		count := len(entries)
-		for i, entry := range entries {
-			fmt.Printf("[%d] %s\n", i+1, entry.Name())
-		}
-
-		// Prompt user to enter IDs to exclude or clear the exclusion list
-		fmt.Println("Enter space-separated numbers of items to exclude, type 'clear' to clear the exclusion list, or '-<ID>' to remove an item from the exclusion list:")
 		ids, _ := reader.ReadString('\n')
 		ids = strings.TrimSpace(ids)
 
@@ -133,51 +125,91 @@ func interactiveMode() {
 			excludePatterns = map[string]bool{}
 			fmt.Println("Exclusion list cleared.")
 		} else {
-			for _, idStr := range strings.Split(ids, " ") {
-				if idStr == "" {
-					continue
-				}
-				if strings.HasPrefix(idStr, "-") {
-					id, err := strconv.Atoi(idStr[1:])
-					if err == nil && id > 0 && id <= count {
-						entry := entries[id-1]
-						delete(excludePatterns, entry.Name())
-						fmt.Printf("Removed %s from exclusion list.\n", entry.Name())
-					} else {
-						fmt.Printf("Invalid ID: %s\n", idStr)
-					}
-				} else {
-					id, err := strconv.Atoi(idStr)
-					if err == nil && id > 0 && id <= count {
-						entry := entries[id-1]
-						excludePatterns[entry.Name()] = true
-						fmt.Printf("Added %s to exclusion list.\n", entry.Name())
-					} else {
-						fmt.Printf("Invalid ID: %s\n", idStr)
-					}
-				}
-			}
+			processIDs(ids)
 		}
 
-		// Show current exclusion list
-		fmt.Println("Current exclusion list:")
-		for pattern := range excludePatterns {
-			fmt.Println(pattern)
-		}
+		showExclusionList()
 
-		// Ask if the user wants to add more or generate the file tree
 		fmt.Println("Do you want to add more items (m), generate the file tree (y), or clear the exclusion list (c)?")
 		choice, _ := reader.ReadString('\n')
 		choice = strings.TrimSpace(choice)
 
-		if choice == "y" {
+		if handleUserChoice(choice) {
 			break
-		} else if choice == "c" {
-			excludePatterns = map[string]bool{}
-			fmt.Println("Exclusion list cleared.")
-		} else if choice != "m" {
-			fmt.Println("Invalid choice.")
 		}
+	}
+}
+
+func listEntries() {
+	fmt.Println("List of files and directories in the current directory:")
+	entries, err := getEntries(".")
+	if err != nil {
+		errorExit("Failed to read current directory")
+	}
+
+	for i, entry := range entries {
+		fmt.Printf("[%d] %s\n", i+1, entry.Name())
+	}
+}
+
+func processIDs(ids string) {
+	entries, _ := getEntries(".")
+	count := len(entries)
+
+	for _, idStr := range strings.Split(ids, " ") {
+		if idStr == "" {
+			continue
+		}
+		if strings.HasPrefix(idStr, "-") {
+			removeExclusion(entries, count, idStr)
+		} else {
+			addExclusion(entries, count, idStr)
+		}
+	}
+}
+
+func removeExclusion(entries []fs.DirEntry, count int, idStr string) {
+	id, err := strconv.Atoi(idStr[1:])
+	if err == nil && id > 0 && id <= count {
+		entry := entries[id-1]
+		delete(excludePatterns, entry.Name())
+		fmt.Printf("Removed %s from exclusion list.\n", entry.Name())
+	} else {
+		fmt.Printf("Invalid ID: %s\n", idStr)
+	}
+}
+
+func addExclusion(entries []fs.DirEntry, count int, idStr string) {
+	id, err := strconv.Atoi(idStr)
+	if err == nil && id > 0 && id <= count {
+		entry := entries[id-1]
+		excludePatterns[entry.Name()] = true
+		fmt.Printf("Added %s to exclusion list.\n", entry.Name())
+	} else {
+		fmt.Printf("Invalid ID: %s\n", idStr)
+	}
+}
+
+func showExclusionList() {
+	fmt.Println("Current exclusion list:")
+	for pattern := range excludePatterns {
+		fmt.Println(pattern)
+	}
+}
+
+func handleUserChoice(choice string) bool {
+	switch choice {
+	case "y":
+		return true
+	case "c":
+		excludePatterns = map[string]bool{}
+		fmt.Println("Exclusion list cleared.")
+		return false
+	case "m":
+		return false
+	default:
+		fmt.Println("Invalid choice.")
+		return false
 	}
 }
 
@@ -187,7 +219,7 @@ func main() {
 
 	flag.StringVar(&exclude, "e", "", "Exclude directories or files (comma-separated)")
 	flag.StringVar(&outputLocation, "o", "", "Specify an output location")
-	flag.BoolVar(&interactive, "i", false, "Interactive mode to select items to exclude")
+	flag.BoolVar(&interactive, "i", false, "Interactive visual mode to select items to exclude")
 	flag.BoolVar(&clear, "c", false, "Clear the exclusion list")
 	flag.BoolVar(&help, "h", false, "Show this help message and exit")
 	flag.BoolVar(&versionFlag, "v", false, "Show version information and exit")
@@ -213,7 +245,7 @@ func main() {
 		}
 	}
 
-	commonExcludes := []string{"node_modules", ".next", ".vscode", ".idea", ".git", "target", "Cargo.lock", "zig-cache", "zig-out", "vendor", "go.sum", "DerivedData", ".svelte-kit"}
+	commonExcludes := []string{"node_modules", ".next", ".vscode", ".idea", ".git", "target", "Cargo.lock"}
 	for _, pattern := range commonExcludes {
 		excludePatterns[pattern] = true
 	}
@@ -227,16 +259,20 @@ func main() {
 		outputLocation = fmt.Sprintf("file_tree_%s.md", currentTime)
 	}
 
-	fmt.Println("Generating your file tree, please wait...")
+	currentDir, err := os.Getwd()
+	if err != nil {
+		errorExit("Failed to get current directory")
+	}
 
-	var err error
+	fmt.Printf("Generating your file tree, while you wait... \nGive the project a star at %s\n", repository)
+
 	outputFile, err = os.Create(outputLocation)
 	if err != nil {
 		errorExit(fmt.Sprintf("Cannot write to output location %s", outputLocation))
 	}
 	defer outputFile.Close()
 
-	fmt.Fprintf(outputFile, "# File Tree\n\nPath to Directory: %s\n\n```sh\n", filepath.Dir(outputLocation))
+	fmt.Fprintf(outputFile, "# File Tree for %s\n\n## Give the project a star at %s\n```sh\n", currentDir, repository)
 	generateTree(outputFile, ".", "")
 	fmt.Fprintln(outputFile, "```")
 
