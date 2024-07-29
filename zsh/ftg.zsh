@@ -1,12 +1,12 @@
 #!/bin/zsh
 
-# Initialize exclude patterns array and other variables
 typeset -A exclude_patterns
-output_location=""
-version="1.0.0"
+output_location="" # Default output is in the pwd, but you can specify a different default here.
+version="1.0.1"
 author="https://github.com/easttexaselectronics"
+repository="https://github.com/easttexaselectronics/FileTreeGenerator"
+donation="https://www.buymeacoffee.com/rmhavelaar"
 
-# Function to show usage
 show_usage() {
     cat <<EOF
 Usage: ftg [-e pattern1,pattern2,...] [-o output_location] [-i] [-c] [-h] [-v]
@@ -21,67 +21,59 @@ EOF
     exit 1
 }
 
-# Function to show version
 show_version() {
     echo "File Tree Generator version: $version"
-    echo "Leave us a star at $author"
-    echo "Buy me a coffee: https://www.buymeacoffee.com/rmhavelaar"
+    echo
+    echo "Please leave this project a star at $repository"
+    echo
+    echo "Buy me a coffee: $donation"
     exit 0
 }
 
-# Function to handle errors
+# Exit on error
 error_exit() {
     echo "Error: $1" >&2
     exit 1
 }
 
-# Parse command line arguments
+# Parse arguments
 zparseopts -D -E e:=exclude o:=output i=interactive c=clear h=help v=version
 
-# Validate and process each option
-for opt in ${(k)exclude}; do
-    IFS=',' read -rA patterns <<<"${exclude[$opt]}"
-    for pattern in "${patterns[@]}"; do
+# Handle options
+handle_options() {
+    # Process the excluded patterns
+    for opt in ${(k)exclude}; do
+        IFS=',' read -rA patterns <<<"${exclude[$opt]}"
+        for pattern in "${patterns[@]}"; do
+            exclude_patterns["$pattern"]=1
+        done
+    done
+
+    
+    [[ -n $output ]] && output_location="${output[-1]}"
+    [[ -n $help ]] && show_usage
+    [[ -n $version ]] && show_version
+    [[ -n $clear ]] && exclude_patterns=()
+}
+
+# Default directories to exclude (add or remove as needed)
+set_common_exclusions() {
+    for pattern in node_modules .next .vscode .idea .git .DS_Store; do
         exclude_patterns["$pattern"]=1
     done
-done
+}
 
-if [[ -n $output ]]; then
-    output_location="${output[-1]}"
-fi
-
-if [[ -n $help ]]; then
-    show_usage
-fi
-
-if [[ -n $version ]]; then
-    show_version
-fi
-
-if [[ -n $clear ]]; then
-    exclude_patterns=()
-fi
-
-# Common directories to exclude
-for pattern in node_modules .next .vscode .idea .git target Cargo.lock zig-cache zig-out vendor go.sum DerivedData .svelte-kit; do
-    exclude_patterns["$pattern"]=1
-done
-
-# Function to check if a file or directory should be excluded
 should_exclude() {
     [[ -n ${exclude_patterns["$1"]} ]]
 }
 
-# Function to get entries in a directory, including hidden files
 get_entries() {
-    entries=("$1"/.*(N) "$1"/*(N))
-    if [ $? -ne 0 ]; then
-        error_exit "Failed to get entries for directory $1"
-    fi
+    local path="$1"
+    local entries=("$path"/.*(N) "$path"/*(N))
+    [[ $? -ne 0 ]] && error_exit "Failed to get entries for directory $path"
     echo "${entries[@]}"
 }
 
-# Function to print entry
 print_entry() {
     local name="$1"
     local type="$2"
@@ -95,19 +87,15 @@ print_entry() {
     fi
 }
 
-# Function to process each entry
 process_entry() {
     local entry="$1"
     local indent="$2"
     local is_last="$3"
-
     local name="${entry##*/}"
     local fullpath="$entry"
     local type=""
 
-    if should_exclude "$name"; then
-        return
-    fi
+    should_exclude "$name" && return
 
     if [ -d "$fullpath" ]; then
         type="Directory"
@@ -117,133 +105,113 @@ process_entry() {
 
     print_entry "$name" "$type" "$indent" "$is_last"
 
+    # Recursively process directories
     if [ "$type" = "Directory" ]; then
-        if [ $is_last -eq 1 ]; then
-            generate_tree "$fullpath" "${indent}    "
-        else
-            generate_tree "$fullpath" "${indent}│   "
-        fi
+        [[ $is_last -eq 1 ]] && generate_tree "$fullpath" "${indent}    " || generate_tree "$fullpath" "${indent}│   "
     fi
 }
 
-# Function to format the file tree
 generate_tree() {
     local path="$1"
     local indent="$2"
     local entries=($(get_entries "$path"))
-    if [ $? -ne 0 ]; then
-        error_exit "Failed to read directory $path"
-    fi
+    [[ $? -ne 0 ]] && error_exit "Failed to read directory $path"
 
     local count=${#entries[@]}
-
     for i in {1..$count}; do
         local entry="${entries[$i-1]}"
         local is_last=0
-        if [ $i -eq $count ]; then
-            is_last=1
-        fi
+        [[ $i -eq $count ]] && is_last=1
         process_entry "$entry" "$indent" "$is_last"
     done
 }
 
-# Interactive mode
-if [[ -n $interactive ]]; then
-    while true; do
-        # List all entries with IDs
-        echo "List of files and directories in $(pwd):"
-        entries=($(get_entries "."))
-        if [ $? -ne 0 ]; then
-            error_exit "Failed to read current directory"
-        fi
+list_entries() {
+    local entries=("$@")
+    local count=${#entries[@]}
+    for i in {1..$count}; do
+        local entry="${entries[$i-1]}"
+        echo "[$i] ${entry##*/}"
+    done
+}
 
-        local count=${#entries[@]}
-        for i in {1..$count}; do
-            local entry="${entries[$i-1]}"
-            echo "[$i] ${entry##*/}"
+update_exclusion_list() {
+    local ids="$1"
+    local entries=("$2")
+    local count=${#entries[@]}
+
+    if [[ "$ids" = "clear" ]]; then
+        exclude_patterns=()
+        echo "Exclusion list cleared."
+    else
+        for id in ${(s: :)ids}; do
+            if [[ "$id" =~ ^-[0-9]+$ ]]; then
+                id=${id#-}
+                [[ $id -gt 0 && $id -le $count ]] && unset 'exclude_patterns[${entries[$id-1]##*/}]' && echo "Removed ${entries[$id-1]##*/} from exclusion list." || echo "Invalid ID: $id" >&2
+            else
+                [[ $id -gt 0 && $id -le $count ]] && exclude_patterns["${entries[$id-1]##*/}"]=1 || echo "Invalid ID: $id" >&2
+            fi
         done
+    fi
+}
 
-        # Prompt user to enter IDs to exclude or clear the exclusion list
+display_exclusion_list() {
+    echo "Current exclusion list:"
+    for pattern in ${(k)exclude_patterns}; do
+        echo "$pattern"
+    done
+}
+
+interactive_mode() {
+    while true; do
+        echo "List of files and directories in $(pwd):"
+        local entries=($(get_entries "."))
+        [[ $? -ne 0 ]] && error_exit "Failed to read current directory"
+
+        list_entries "${entries[@]}"
+
         echo "Enter space-separated numbers of items to exclude, type 'clear' to clear the exclusion list, or '-<ID>' to remove an item from the exclusion list:"
         read -r ids
+        update_exclusion_list "$ids" "${entries[@]}"
+        display_exclusion_list
 
-        if [[ "$ids" = "clear" ]]; then
-            exclude_patterns=()
-            echo "Exclusion list cleared."
-        else
-            for id in ${(s: :)ids}; do
-                if [[ "$id" =~ ^-[0-9]+$ ]]; then
-                    id=${id#-}
-                    if [[ $id -gt 0 && $id -le $count ]]; then
-                        local entry="${entries[$id-1]}"
-                        unset 'exclude_patterns[${entry##*/}]'
-                        echo "Removed ${entry##*/} from exclusion list."
-                    else
-                        echo "Invalid ID: $id" >&2
-                    fi
-                else
-                    if [[ $id -gt 0 && $id -le $count ]]; then
-                        local entry="${entries[$id-1]}"
-                        exclude_patterns["${entry##*/}"]=1
-                    else
-                        echo "Invalid ID: $id" >&2
-                    fi
-                fi
-            done
-        fi
-
-        # Show current exclusion list
-        echo "Current exclusion list:"
-        for pattern in ${(k)exclude_patterns}; do
-            echo "$pattern"
-        done
-
-        # Ask if the user wants to add more or generate the file tree
         echo "Do you want to add more items (m), generate the file tree (y), or clear the exclusion list (c)?"
         read -r choice
 
-        if [[ "$choice" = "y" ]]; then
-            break
-        elif [[ "$choice" = "c" ]]; then
-            exclude_patterns=()
-            echo "Exclusion list cleared."
-        elif [[ "$choice" != "m" ]]; then
-            echo "Invalid choice: $choice" >&2
-        fi
+        case "$choice" in
+            y) break ;;
+            c) exclude_patterns=(); echo "Exclusion list cleared." ;;
+            m) ;;
+            *) echo "Invalid choice: $choice" >&2 ;;
+        esac
     done
-fi
+}
 
-# Get the current time
-current_time=$(date +"%H-%M-%S")
+main() {
+    handle_options
+    set_common_exclusions
+    [[ -n $interactive ]] && interactive_mode
 
-# Determine output file location
-if [ -z "$output_location" ]; then
-    output_location="file_tree_${current_time}.md"
-fi
+    local current_time=$(date +"%H-%M-%S")
+    [[ -z "$output_location" ]] && output_location="file_tree_${current_time}.md"
 
-# Start message
-echo "Generating your file tree, please wait..."
-
-# Ensure output file is writable
-if ! touch "$output_location" 2>/dev/null; then
-    error_exit "Cannot write to output location $output_location"
-fi
-
-# Write to file_tree
-{
-    echo "# File Tree"
+    echo "Generating your file tree, while you wait..."
     echo
-    echo "Path to Directory: $(pwd)"
+    echo "Please leave this project a star at $repository"
     echo
-    echo "\`\`\`sh"
-    generate_tree "."
-    echo "\`\`\`"
-} >"$output_location"
+    touch "$output_location" 2>/dev/null || error_exit "Cannot write to output location $output_location"
 
-# Check if write operation was successful
-if [ $? -ne 0 ]; then
-    error_exit "Failed to write to output location $output_location"
-fi
+    {
+        echo "# File Tree for $(pwd)"
+        echo
+        echo "\`\`\`sh"
+        generate_tree "."
+        echo "\`\`\`"
+    } >"$output_location"
 
-# Completion message
-echo "File tree has been written to $output_location"
+    [[ $? -ne 0 ]] && error_exit "Failed to write to output location $output_location"
+
+    echo "File tree has been written to $output_location"
+}
+
+main "$@"
